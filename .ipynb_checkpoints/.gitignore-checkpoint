@@ -1,5 +1,0 @@
-venv/*
-VoiceBank+DEMAND/wavs_clean/*
-VoiceBank+DEMAND/wavs_noisy/*
-VoiceBank+DEMAND/wav_clean.zip
-VoiceBank+DEMAND/wav_noisy.zip
