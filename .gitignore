@@ -1,0 +1,10 @@
+venv/*
+VoiceBank+DEMAND/wavs_clean/*
+VoiceBank+DEMAND/wavs_noisy/*
+VoiceBank+DEMAND/wav_clean.zip
+VoiceBank+DEMAND/wav_noisy.zip
+VoiceBank+DEMAND/testset_clean/*
+VoiceBank+DEMAND/testset_noisy/*
+*_generated_audio
+*_checkpoint
+xLSTM-SENet/*

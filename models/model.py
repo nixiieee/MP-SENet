@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 import numpy as np
 from models.transformer import TransformerBlock
+from .xlstm_block import TFxLSTMBlock
+from .mamba_block import TFMambaBlock
+from .mixed_block import TFMixedBlock
 from utils import LearnableSigmoid2d
 from pesq import pesq
 from joblib import Parallel, delayed
@@ -132,15 +135,22 @@ class TSTransformerBlock(nn.Module):
 
 
 class MPNet(nn.Module):
-    def __init__(self, h, num_tsblocks=4):
+    def __init__(self, h):
         super(MPNet, self).__init__()
         self.h = h
-        self.num_tscblocks = num_tsblocks
+        self.num_tscblocks = h.num_tsblocks
         self.dense_encoder = DenseEncoder(h, in_channel=2)
 
-        self.TSTransformer = nn.ModuleList([])
-        for i in range(num_tsblocks):
-            self.TSTransformer.append(TSTransformerBlock(h))
+        self.TSBlocks = nn.ModuleList([])
+        for i in range(h.num_tsblocks):
+            if h.block_type.lower() == "xlstm":
+                self.TSBlocks.append(TFxLSTMBlock(h))
+            elif h.block_type.lower() == "mamba":
+                self.TSBlocks.append(TFMambaBlock(h))
+            elif h.block_type.lower() == "mixed":
+                self.TSBlocks.append(TFMixedBlock(h))
+            else:
+                self.TSBlocks.append(TSTransformerBlock(h))
         
         self.mask_decoder = MaskDecoder(h, out_channel=1)
         self.phase_decoder = PhaseDecoder(h, out_channel=1)
@@ -151,7 +161,7 @@ class MPNet(nn.Module):
         x = self.dense_encoder(x)
 
         for i in range(self.num_tscblocks):
-            x = self.TSTransformer[i](x)
+            x = self.TSBlocks[i](x)
         
         denoised_amp = noisy_amp * self.mask_decoder(x)
         denoised_pha = self.phase_decoder(x)
