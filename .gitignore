@@ -8,11 +8,13 @@ VoiceBank+DEMAND/testset_noisy/*.wav
 *_generated_audio
 *_checkpoint
 xLSTM-SENet/*
-baseline_model
 __pycache__/
 .ipynb_checkpoints/
 *.pyc
 *.pyo
 **/__pycache__/
 **/.ipynb_checkpoints/
-
+archive (1).zip
+*_requirements.txt
+requirements2.txt
+requirements_*.txt

@@ -1,5 +1,3 @@
-# Copy from "https://github.com/ruizhecao96/CMGAN/blob/main/src/tools/compute_metrics.py"
-
 import numpy as np
 from scipy.io import wavfile
 from scipy.linalg import toeplitz, norm
@@ -7,23 +5,21 @@ from scipy.fftpack import fft
 import math
 from scipy import signal
 from pesq import pesq
+import librosa
+
+from resemblyzer import VoiceEncoder, preprocess_wav
+from sklearn.metrics.pairwise import cosine_similarity
+import logging
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 ''' 
 This is a python script which can be regarded as implementation of matlab script "compute_metrics.m".
 
 Usage: 
-    pesq, csig, cbak, covl, ssnr, stoi = compute_metrics(cleanFile, enhancedFile, Fs, path)
-    cleanFile: clean audio as array or path if path is equal to 1
-    enhancedFile: enhanced audio as array or path if path is equal to 1
-    Fs: sampling rate, usually equals to 8000 or 16000 Hz
-    path: whether the "cleanFile" and "enhancedFile" arguments are in .wav format or in numpy array format, 
-          1 indicates "in .wav format"
-          
-Example call:
-    pesq_output, csig_output, cbak_output, covl_output, ssnr_output, stoi_output = \
-            compute_metrics(target_audio, output_audio, 16000, 0)
+    ... = compute_metrics(cleanFile, enhancedFile, Fs, path)
+    Returns all metrics including new ones except ASR-related metrics (LPS, WAcc, CAcc).
 '''
-
 
 def compute_metrics(cleanFile, enhancedFile, Fs, path):
     alpha = 0.95
@@ -76,7 +72,23 @@ def compute_metrics(cleanFile, enhancedFile, Fs, path):
 
     STOI = stoi(data1, data2, sampling_rate1)
 
-    return pesq_mos, CSIG, CBAK, COVL, segSNR, STOI
+    ESTOI = estoi(data1, data2, sampling_rate1)
+
+    SI_SDR = si_sdr(data1, data2)
+
+    MCD = mcd(data1, data2, sampling_rate1)
+
+    LSD = lsd(data1, data2)
+
+    logging.getLogger('resemblyzer').setLevel(logging.ERROR)
+    encoder = VoiceEncoder(verbose=False)
+    clean_wav = preprocess_wav(data1)
+    enh_wav = preprocess_wav(data2)
+    clean_emb = encoder.embed_utterance(clean_wav)
+    enh_emb = encoder.embed_utterance(enh_wav)
+    SpkSim_val = cosine_similarity(clean_emb.reshape(1, -1), enh_emb.reshape(1, -1))[0][0]
+
+    return pesq_mos, CSIG, CBAK, COVL, segSNR, STOI, ESTOI, SI_SDR, MCD, LSD, SpkSim_val
 
 
 def wss(clean_speech, processed_speech, sample_rate):
@@ -482,3 +494,83 @@ def taa_corr(x, y):
     rho = np.trace(np.matmul(xn, np.transpose(yn)))
 
     return rho
+
+def estoi(x, y, fs_signal):
+    if np.size(x) != np.size(y):
+        raise ValueError('x and y should have the same length')
+
+    fs = 10000
+    N_frame = 256
+    K = 512
+    J = 15
+    mn = 150
+    H, _ = thirdoct(fs, K, J, mn)
+    N = 30
+    Beta = -15
+    dyn_range = 40
+
+    if fs_signal != fs:
+        x = signal.resample_poly(x, fs, fs_signal)
+        y = signal.resample_poly(y, fs, fs_signal)
+
+    x, y = removeSilentFrames(x, y, dyn_range, N_frame, int(N_frame / 2))
+
+    x_hat = stdft(x, N_frame, N_frame / 2, K)
+    y_hat = stdft(y, N_frame, N_frame / 2, K)
+
+    x_hat = np.transpose(x_hat[:, 0:(int(K / 2) + 1)])
+    y_hat = np.transpose(y_hat[:, 0:(int(K / 2) + 1)])
+
+    X = np.sqrt(np.matmul(H, np.square(np.abs(x_hat))))
+    Y = np.sqrt(np.matmul(H, np.square(np.abs(y_hat))))
+
+    d_interm = np.zeros(np.size(np.arange(N - 1, x_hat.shape[1])))
+    c = 10 ** (-Beta / 20)
+
+    for m in range(N - 1, x_hat.shape[1]):
+        X_seg = X[:, (m - N + 1): (m + 1)]
+        Y_seg = Y[:, (m - N + 1): (m + 1)]
+        Y_prime = Y_seg
+        d_interm[m - N + 1] = taa_corr(X_seg, Y_prime) / J
+
+    d = d_interm.mean()
+    return d
+
+def si_sdr(reference, estimation):
+    reference = reference - np.mean(reference)
+    estimation = estimation - np.mean(estimation)
+    reference_norm = norm(reference)
+    estimation_norm = norm(estimation)
+    if reference_norm == 0 or estimation_norm == 0:
+        return 0.0
+    reference = reference / reference_norm
+    estimation = estimation / estimation_norm
+    reference_pow = np.mean(reference**2)
+    scale = np.dot(reference, estimation) / reference_pow
+    e_target = scale * reference
+    e_res = estimation - e_target
+    signal = np.mean(e_target**2)
+    noise = np.mean(e_res**2)
+    if noise == 0:
+        return float('inf')
+    sisdr = 10 * np.log10(signal / noise)
+    return sisdr
+
+def mcd(clean, enhanced, sr):
+    mfcc_clean = librosa.feature.mfcc(y=clean, sr=sr, n_mfcc=13)
+    mfcc_enh = librosa.feature.mfcc(y=enhanced, sr=sr, n_mfcc=13)
+    t = min(mfcc_clean.shape[1], mfcc_enh.shape[1])
+    delta = mfcc_clean[:13, :t] - mfcc_enh[:13, :t]
+    mcd_value = np.mean(np.sqrt(2 * np.sum(delta ** 2, axis=0))) * (10 / np.log(10))
+    return mcd_value
+
+def lsd(clean, enhanced):
+    stft_clean = librosa.stft(clean)
+    stft_enh = librosa.stft(enhanced)
+    pow_clean = np.abs(stft_clean)**2
+    pow_enh = np.abs(stft_enh)**2
+    min_frames = min(pow_clean.shape[1], pow_enh.shape[1])
+    pow_clean = pow_clean[:, :min_frames]
+    pow_enh = pow_enh[:, :min_frames]
+    lsd_value = np.mean(np.sqrt(np.mean((10 * np.log10(pow_clean + 1e-10) - 10 * np.log10(pow_enh + 1e-10)) ** 2, axis=0)))
+    return lsd_value
